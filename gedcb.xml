@@ -1,0 +1,669 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_2.dtd'>
+<nta>
+	<declaration>// Client-Server Parameters
+const int resp_time = 4; // Best case time in which server responds to a request
+const int time_out = 25; // Time in which a request times out
+const int MRC = 500; // Maximum number of requests to be handled by the server before halting
+const int client_count = 8; // Number of clients
+const int ASRC = 16; // Availability Streak Request count
+const int UST = 250; // Unavailability Streak Time
+
+// DCBN Parameters
+const int FT = 6; // Hard Failure Threshold
+const int softFT = 2; // Soft Failure Threshold
+const int SST = 2; // Suspcion Success Threshold
+const int HOFT = 1; // Half-Open Failure Threshold
+const int HOST = 2; // Half-Open Success Threshold
+const int OD = 100; // Open Delay
+const int window_size = 10; // Size of window of requests being tracked
+
+// Parameters for client-client gossiping
+const int gossip_count = 2; // Number of clients to whom gossip messages are sent
+const int death_threshold = 10; // Do not consider an opinion which is older than these many gossip cycles
+
+// GEDCB client state data structures
+int [0,350] vid[client_count + 1] = {0,0,0,0,0,0,0,0,0}; // Version ID
+
+int [-1,1] opinion[client_count + 1][client_count + 1] = {{-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                          {-1,-1,-1,-1,-1,-1,-1,-1,-1}}; // -1 - Not in gossiping set, 0 - Open, 1 - suspicion
+int [-1,15] age[client_count + 1][client_count + 1] = {{-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1},
+                                                      {-1,-1,-1,-1,-1,-1,-1,-1,-1}}; // -1 - Not in gossiping set, 'n' - if opinion is n gossip cycles old
+
+
+// Server data structures and parameters for participation in GEDCB
+const int revision_time = 40; // Time duration between two consecutive revisions of gossiping client set
+const int infection_count = 2; // Number of active clients to which revised gossip-set is informed 
+int [0,1] req_count[client_count + 1] = {0,0,0,0,0,0,0,0,0}; // Server maintains the list of client that consumed the service in last revision_time span
+int [1,350] version = 1; // Version of gossip set
+
+// Variables related to server operation
+int [0,MRC] PRC = MRC; // Pending Request Counter (server-side)
+int [0,ASRC] HRC = 0; // Handled Request Counter (Utility for triggering changes in availability)
+int [0,1] available = 1; // 1 - if server is available, 0 - if unavailable
+int [0,1] halted = 0; // 1 - if server has halted, 0 - if server has not yet halted
+
+// Variables related to client operation
+int [0,1] alive[client_count + 1] = {1,1,1,1,1,1,0,0,0}; // 1 - if a given client is alive or not
+int [0, MRC] CPRC = MRC; // Number of requests in pending request pool
+broadcast chan respond[client_count + 1]; // Server -&gt; Client channels for triggering response transition. Channel 0 is dummy channel
+const int s_delay = 500; // Delay after which the set if active clients is shuffled
+const int inactive_clients = 3; // Number of clients inactive at any given time
+
+// Metric
+int TC = 0; // Timeout counter
+clock exec; // Tracks total execution time
+
+// Server's request queue (buffer)
+int buf[client_count]; // Server's request buffer. buf[i] holds the response channel number
+int head = 0; // Buffer queue head index
+int tail = 0; // Buffer queue tail index
+int buf_count = 0; // Buffer queue length</declaration>
+	<template>
+		<name x="5" y="5">Server</name>
+		<declaration>clock server_clk;
+void pop() {
+    buf[head] = 0;
+    head = (client_count + head - 1) % client_count;
+    buf_count--;
+}
+
+void manage_buf(int cid) {
+    if(cid != 0) {
+        PRC--;
+        if(PRC == 0) {
+            halted = 1;
+            available = 0;
+        }
+        HRC++;
+        if(HRC == ASRC) {
+            available = 0;
+            HRC = 0;
+        }
+        if(req_count[cid] == 0) req_count[cid]++;
+    }
+    pop();
+}</declaration>
+		<location id="id0" x="-731" y="-442">
+			<name x="-775" y="-450">idle</name>
+			<label kind="invariant" x="-903" y="-450">server_clk &lt;= 0</label>
+		</location>
+		<location id="id1" x="-869" y="-332">
+			<name x="-852" y="-340">halt</name>
+			<label kind="invariant" x="-901" y="-314">exec'==0</label>
+		</location>
+		<location id="id2" x="-833" y="-612">
+			<name x="-850" y="-646">busy</name>
+			<label kind="invariant" x="-901" y="-663">server_clk &lt;= resp_time</label>
+		</location>
+		<location id="id3" x="-442" y="-442">
+			<name x="-425" y="-450">unavailable</name>
+			<label kind="invariant" x="-425" y="-433">server_clk &lt;= UST</label>
+		</location>
+		<location id="id4" x="-578" y="-535">
+			<name x="-561" y="-544">await_req</name>
+			<label kind="invariant" x="-484" y="-544">server_clk &lt;= 1</label>
+		</location>
+		<init ref="id0"/>
+		<transition>
+			<source ref="id4"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-646" y="-501">server_clk &gt;= 1</label>
+			<label kind="assignment" x="-663" y="-484">server_clk = 0</label>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id4"/>
+			<label kind="guard" x="-782" y="-561">buf_count == 0 and available == 1</label>
+			<nail x="-723" y="-480"/>
+			<nail x="-621" y="-540"/>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-671" y="-399">server_clk &gt;= UST</label>
+			<label kind="assignment" x="-705" y="-365">available = 1, server_clk = 0</label>
+			<nail x="-501" y="-374"/>
+			<nail x="-688" y="-374"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id3"/>
+			<label kind="guard" x="-697" y="-442">available == 0 and halted == 0</label>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-1028" y="-544">server_clk &gt;= resp_time</label>
+			<label kind="synchronisation" x="-994" y="-527">respond[buf[head]]!</label>
+			<label kind="assignment" x="-1105" y="-510">server_clk = 0, manage_buf(buf[head])</label>
+			<nail x="-858" y="-561"/>
+			<nail x="-807" y="-476"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id2"/>
+			<label kind="guard" x="-807" y="-586">buf_count &gt; 0 and available == 1</label>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="guard" x="-892" y="-399">halted == 1</label>
+		</transition>
+	</template>
+	<template>
+		<name>Gossiper</name>
+		<parameter>const int id</parameter>
+		<declaration>clock g_clk;
+const int delay = 4; // Delay between 2 gossip iterations by the client
+
+void update_state_from_gossip(int sender, int recvr) {
+
+    int i = 0;
+
+    if(alive[recvr] == 0) {
+        return;
+    }
+    
+    if(vid[sender] &lt; vid[recvr]) {
+        return;
+    }
+
+    if(vid[sender] &gt; vid[recvr]) {
+        vid[recvr] = vid[sender];
+        for(i = 1; i&lt;client_count+1; i++) {
+            if(opinion[sender][i] == -1) {
+                opinion[recvr][i] = -1;
+                age[recvr][i] = -1;
+
+            } else if(opinion[sender][i] != -1 &amp;&amp; opinion[recvr][i] == -1) {
+                opinion[recvr][i] = opinion[sender][i];
+                age[recvr][i] = age[sender][i];
+
+            }
+        }
+    }
+
+    for(i = 1; i&lt;client_count + 1; i++) {
+        if(opinion[recvr][i] != -1) {
+           if(age[sender][i] &lt; age[recvr][i]) {
+                opinion[recvr][i] = opinion[sender][i];
+                age[recvr][i] = age[sender][i];
+            }
+        }
+    }
+}
+
+
+void send_gossip(int random_id) {
+
+    int i = 0;
+    int count = client_count;
+    int j = gossip_count;
+    int recvr = random_id;
+
+    if(alive[id]) {
+
+        for(i = 0; i&lt;client_count+1; i++) {
+            if(age[id][i]!=-1){
+                age[id][i]++;
+                if(age[id][i] &gt;= death_threshold + 1) age[id][i] = death_threshold;
+            }
+        }
+
+        age[id][id] = 0;
+
+        while(j != 0 &amp;&amp; count != 0) {
+            if(recvr != id &amp;&amp; opinion[id][recvr] != -1) {
+                update_state_from_gossip(id, recvr);
+                j--;
+            }
+                recvr = recvr % client_count + 1;
+            count--;
+        }
+
+    }
+}</declaration>
+		<location id="id5" x="-807" y="-425">
+			<name x="-850" y="-434">idle</name>
+			<label kind="invariant" x="-926" y="-417">g_clk &lt;= delay</label>
+		</location>
+		<location id="id6" x="-544" y="-425">
+			<name x="-527" y="-434">halt</name>
+		</location>
+		<init ref="id5"/>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id5"/>
+			<label kind="select" x="-909" y="-587">random_id : int[1, client_count]</label>
+			<label kind="guard" x="-918" y="-570">g_clk &gt;= delay and halted == 0</label>
+			<label kind="assignment" x="-926" y="-553">g_clk = 0, send_gossip(random_id)</label>
+			<nail x="-705" y="-527"/>
+			<nail x="-909" y="-527"/>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id6"/>
+			<label kind="guard" x="-790" y="-417">g_clk &gt;= delay and halted == 1</label>
+		</transition>
+	</template>
+	<template>
+		<name>GossipSetReviser</name>
+		<declaration>clock gsr_clk;
+
+void clear_req_count() {
+    int i;
+    for(i = 0; i&lt;client_count + 1; i++) {
+        req_count[i] = 0;
+    }
+    version++;
+}
+
+void send_gossip_set() {
+    int i = 0;
+    int j = infection_count;
+    int k = 0;
+    if(available == 1) {
+        for(i = 1; i&lt;client_count + 1; i++) {
+            if(req_count[i] &gt; 0 &amp;&amp; j!=0) {
+                vid[i] = version;
+                j--;
+                for(k = 1; k&lt;client_count+1; k++) {
+                    if(req_count[k] &gt; 0 &amp;&amp; opinion[i][k] == -1) {                
+                        opinion[i][k] = 0;
+                        age[i][k] = 10;
+
+                    } else if(req_count[k] == 0){
+                        opinion[i][k] = -1;
+                        age[i][k] = -1;
+
+                    }
+                }
+
+            }
+        }
+    }
+    clear_req_count();
+}</declaration>
+		<location id="id7" x="-501" y="-187">
+			<name x="-543" y="-195">idle</name>
+			<label kind="invariant" x="-688" y="-178">gsr_clk &lt;= revision_time</label>
+		</location>
+		<location id="id8" x="-170" y="-187">
+			<name x="-153" y="-195">halt</name>
+		</location>
+		<init ref="id7"/>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id7"/>
+			<label kind="guard" x="-637" y="-340">gsr_clk &gt;= revision_time and halted == 0</label>
+			<label kind="assignment" x="-594" y="-323">gsr_clk = 0, send_gossip_set()</label>
+			<nail x="-433" y="-255"/>
+			<nail x="-390" y="-297"/>
+			<nail x="-603" y="-297"/>
+		</transition>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id8"/>
+			<label kind="guard" x="-484" y="-170">gsr_clk &gt;= revision_time and halted == 1</label>
+		</transition>
+	</template>
+	<template>
+		<name>Client</name>
+		<parameter>const int cid</parameter>
+		<declaration>clock clk;
+const int waiting_delay = 4;
+int [0,3] cb = 0; // DCBN State - 0 -&gt; Closed, 1 -&gt; Open, 2 -&gt; Half Open, 3 -&gt; Suspicion
+int [0,FT] clientTO = 0; // Timeout counter for each client
+int [0,HOST] cbSuccess = 0; // Success counter for Half-Open State
+int [-1,1] window[10] = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}; // Window of requests with respective status. 0 -&gt; Success, 1 -&gt; Timeout, -1 -&gt; Empty slot
+int [0,9] wptr = 0; // Window pointer
+
+// Reset client data structures when client dies
+void resetIfDead() {
+    int i = 0;
+    cb = 0;
+    clientTO = 0;
+    cbSuccess = 0;
+    for(i = 0; i&lt;window_size; i++) {
+         window[i] = -1;
+    }
+}
+
+// Pushes request to the server queue
+void push() {
+    buf[tail] = cid;
+    tail = (client_count + tail - 1) % client_count;
+    buf_count++;
+    CPRC--;
+}
+
+// Breaks connection from the server and removes the request it had added to the queue
+void break_conn() {
+  int i = 0;
+  int j = 0;
+  int found = 0;
+  int pos;
+  for (i = 0; i &lt; client_count; i++) {
+    if (buf[i] == cid) {
+      buf[i] = 0;
+      pos = i;
+      found = 1;
+    }
+  }
+
+  if(found == 0) return;
+
+  if (pos != head) {
+    i = pos;
+    j = (client_count + i - 1) % client_count;
+    while (j != tail) {
+      buf[i] = buf[j];
+      i = j;
+      j = (client_count + j - 1) % client_count;
+    }
+    buf[i] = 0;
+    tail = i;
+    buf_count--;
+  }
+}
+
+// Utility function to clear the window of requests the DCBN is tracking 
+void reset_counters() {
+        int i = 0;
+        clientTO = 0;
+        cbSuccess = 0;
+        for(i = 0; i&lt;window_size; i++) {
+            window[i] = -1;
+        }
+}
+
+// Register the occurance of timeout into the data structure of a client with ID cid
+void register_timeout() {
+    int i = 0;    
+    if(cid == 0) return;
+    
+    window[wptr] = 1;
+    wptr = (wptr + 1) % window_size;
+
+    clientTO = 0;
+    for(i = 0; i&lt;window_size; i++) {
+        if(window[i] == 1) clientTO++;
+    }
+}
+
+// Register the receipt of successful response into the data structure of a client with ID cid
+void register_success() {
+    int i = 0;
+    
+    window[wptr] = 0;
+    wptr = (wptr + 1) % window_size;
+
+    clientTO = 0;
+    for(i = 0; i&lt;window_size; i++) {
+        if(window[i] == 1) clientTO++;
+    }
+}
+
+// DCBN state machine failure handling logic
+void cb_timeout_handler() {
+    if(cb == 3 &amp;&amp; clientTO == FT) {
+        reset_counters();
+        cb = 1;
+        opinion[cid][cid] = 1;
+    } else if(cb == 0 &amp;&amp; clientTO == softFT) {
+        cb = 3;
+        cbSuccess = 0;
+        opinion[cid][cid] = 1;
+    } else if(cb == 2 &amp;&amp; clientTO == HOFT) {
+        reset_counters();
+        cb = 1;
+        opinion[cid][cid] = 1;
+    }
+}
+
+// DCBN state machine success handling logic
+void cb_success_handler() {
+    if(cb == 2) {
+        cbSuccess++;
+        if(cbSuccess == HOST) {
+            reset_counters();
+            cb = 0;
+            opinion[cid][cid] = 0;
+        }
+    } else if(cb == 3) {
+        cbSuccess++;
+        if(cbSuccess == SST) {
+            reset_counters();
+            cb = 0;
+            opinion[cid][cid] = 0;
+        }
+    }
+}
+
+void check_for_suspicion() {
+    int i = 0;
+    int sus_count = 0;
+    int total_count = 0;
+    int majority;
+
+    if(cb != 3) return; 
+
+    for(i = 1; i&lt;client_count + 1; i++) {
+        if(age[cid][i] != -1 &amp;&amp; age[cid][i] &lt;= death_threshold){
+            total_count++;
+            if(opinion[cid][i] == 1) sus_count++;
+        }
+    }
+
+    if(total_count % 2 == 0) majority = total_count / 2 + 1;
+    else majority = (total_count + 1)/2;
+
+    if(total_count &gt; 1 &amp;&amp; sus_count &gt;= majority) {
+        cb = 1;
+        reset_counters();
+        opinion[cid][cid] = 1;
+    }
+}
+
+void handle_timeout() {
+    CPRC++;
+    TC++;
+    if(alive[cid] == 1) {
+        register_timeout();
+        cb_timeout_handler();
+        check_for_suspicion();
+    } 
+    break_conn();    
+}
+
+void handle_response() {
+
+    if(alive[cid] == 1) {
+        register_success();
+        cb_success_handler();
+        check_for_suspicion();
+    }
+
+}
+</declaration>
+		<location id="id9" x="-765" y="-510">
+			<name x="-807" y="-518">idle</name>
+			<label kind="invariant" x="-884" y="-518">clk &lt;= 0</label>
+		</location>
+		<location id="id10" x="-289" y="-510">
+			<name x="-272" y="-519">blocked</name>
+			<label kind="invariant" x="-340" y="-484">clk &lt;= time_out</label>
+		</location>
+		<location id="id11" x="-961" y="-366">
+			<name x="-944" y="-374">halt</name>
+		</location>
+		<location id="id12" x="-603" y="-348">
+			<name x="-586" y="-357">open_circuit</name>
+			<label kind="invariant" x="-586" y="-340">clk &lt;= OD</label>
+		</location>
+		<location id="id13" x="-1028" y="-697">
+			<name x="-1038" y="-731">wait</name>
+			<label kind="invariant" x="-1130" y="-748">clk &lt;= waiting_delay</label>
+		</location>
+		<init ref="id9"/>
+		<transition>
+			<source ref="id13"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-1122" y="-603">clk &gt;= waiting_delay</label>
+			<label kind="assignment" x="-1020" y="-586">clk = 0</label>
+			<nail x="-969" y="-603"/>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id13"/>
+			<label kind="guard" x="-977" y="-680">(halted == 0 and CPRC == 0 and alive[cid] == 1 and cb != 1) or  (halted == 0 and alive[cid] == 0)</label>
+			<label kind="assignment" x="-943" y="-654">resetIfDead()</label>
+		</transition>
+		<transition>
+			<source ref="id12"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-654" y="-467">clk &gt;= OD</label>
+			<label kind="assignment" x="-654" y="-450">cb = 2, clk = 0</label>
+			<nail x="-612" y="-391"/>
+			<nail x="-705" y="-484"/>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id12"/>
+			<label kind="guard" x="-875" y="-416">halted == 0 and alive[cid] == 1 and cb == 1</label>
+		</transition>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-603" y="-646">clk &gt;=time_out</label>
+			<label kind="assignment" x="-629" y="-629">clk = 0, handle_timeout()</label>
+			<nail x="-365" y="-629"/>
+			<nail x="-705" y="-629"/>
+		</transition>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-663" y="-586">clk &lt; time_out</label>
+			<label kind="synchronisation" x="-552" y="-586">respond[cid]?</label>
+			<label kind="assignment" x="-637" y="-569">clk = 0, handle_response()</label>
+			<nail x="-382" y="-569"/>
+			<nail x="-680" y="-569"/>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id11"/>
+			<label kind="guard" x="-952" y="-459">halted == 1</label>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id10"/>
+			<label kind="guard" x="-739" y="-527">halted == 0 and alive[cid] == 1 and CPRC &gt; 0 and cb != 1</label>
+			<label kind="assignment" x="-561" y="-510">push()</label>
+		</transition>
+	</template>
+	<template>
+		<name>ClientShuffler</name>
+		<declaration>clock s_clk;
+
+void shuffle(int cid) {
+    int i = 0;
+    int k = 0;
+    int j = inactive_clients;
+    int client = cid; 
+
+    for(i = 0; i&lt;client_count+1; i++) {
+        if(alive[i] == 0) {
+            for(k = 0; k&lt;client_count + 1; k++) {
+                opinion[i][k] = -1;
+                age[i][k] = -1;
+            }
+        }
+        alive[i] = 1;
+    }
+
+    while(j != 0) {
+        alive[client] = 0;
+        for(i = 0; i&lt;client_count + 1; i++) {
+            opinion[client][i] = -1;
+            age[client][i] = -1;
+        }
+        client = ((client) % (client_count)) + 1;
+        j--;
+    }
+}</declaration>
+		<location id="id14" x="-680" y="-204">
+			<name x="-731" y="-229">idle</name>
+			<label kind="invariant" x="-824" y="-212">s_clk &lt;= s_delay</label>
+		</location>
+		<location id="id15" x="-399" y="-204">
+			<name x="-382" y="-213">halt</name>
+		</location>
+		<init ref="id14"/>
+		<transition>
+			<source ref="id14"/>
+			<target ref="id14"/>
+			<label kind="select" x="-731" y="-357">cid : int[1, client_count]</label>
+			<label kind="guard" x="-765" y="-340">s_clk &gt;= s_delay and halted == 0</label>
+			<label kind="assignment" x="-731" y="-315">s_clk = 0, shuffle(cid)</label>
+			<nail x="-629" y="-247"/>
+			<nail x="-561" y="-315"/>
+			<nail x="-748" y="-314"/>
+		</transition>
+		<transition>
+			<source ref="id14"/>
+			<target ref="id15"/>
+			<label kind="guard" x="-663" y="-195">s_clk &gt;= s_delay and halted == 1</label>
+		</transition>
+	</template>
+	<system>server = Server();
+c1 = Client(1);
+c2 = Client(2);
+c3 = Client(3);
+c4 = Client(4);
+c5 = Client(5);
+c6 = Client(6);
+c7 = Client(7);
+c8 = Client(8);
+g1 = Gossiper(1);
+g2 = Gossiper(2);
+g3 = Gossiper(3);
+g4 = Gossiper(4);
+g5 = Gossiper(5);
+g6 = Gossiper(6);
+g7 = Gossiper(7);
+g8 = Gossiper(8);
+cs = ClientShuffler();
+gsr = GossipSetReviser();
+
+system c1, c2, c3, c4, c5, c6, c7, c8, server, g1, g2, g3, g4, g5, g6, g7, g8, cs, gsr;
+</system>
+	<queries>
+		<query>
+			<formula>simulate [&lt;=10500; 1] {TC}</formula>
+			<comment>Query to observe a time-bound whithin which TC stops increasing. We use this time-bound in other SMC queries.</comment>
+		</query>
+		<query>
+			<formula>E[&lt;=10500; 500](max: exec)</formula>
+			<comment>Query to obtain the expected time needed by the server to addressing MRC number of requests.</comment>
+		</query>
+		<query>
+			<formula>E[&lt;=10500; 500](max: TC)</formula>
+			<comment>Query to obtain expected number of timeouts experienced by the system for addressing MRC number of requests.</comment>
+		</query>
+	</queries>
+</nta>

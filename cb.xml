@@ -1,0 +1,413 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_2.dtd'>
+<nta>
+	<declaration>// Client-Server Parameters
+const int resp_time = 4; // Best case time in which server responds to a request
+const int time_out = 25; // Time in which a request times out
+const int MRC = 500; // Maximum number of requests to be handled by the server before halting
+const int client_count = 8; // Number of clients
+const int ASRC = 16; // Availability Streak Request count
+const int UST = 250; // Unavailability Streak Time
+
+// CB Parameters
+const int FT = 6; // Failure Threshold
+const int HOFT = 1; // Half-Open Failure Threshold
+const int HOST = 2; // Half-Open Success Threshold
+const int OD = 100; // Open Delay
+const int window_size = 10; // Size of window of requests being tracked
+
+// Variables related to server operation
+int [0,MRC] PRC = MRC; // Pending Request Counter (server-side)
+int [0,ASRC] HRC = 0; // Handled Request Counter (Utility for triggering changes in availability)
+int [0,1] available = 1; // 1 - if server is available, 0 - if unavailable
+int [0,1] halted = 0; // 1 - if server has halted, 0 - if server has not yet halted
+
+// Variables related to client operation
+int [0,1] alive[client_count + 1] = {1,1,1,1,1,1,0,0,0}; // 1 - if a given client is alive or not
+int [0, MRC] CPRC = MRC; // Number of requests in pending request pool
+broadcast chan respond[client_count + 1]; // Server -&gt; Client channels for triggering response transition. Channel 0 is dummy channel
+const int s_delay = 500; // Delay after which the set if active clients is shuffled
+const int inactive_clients = 3; // Number of clients inactive at any given time
+
+// Metrics
+int TC = 0; // Timeout counter
+clock exec; // Tracks total execution time
+
+// Server's request queue (buffer)
+int buf[client_count]; // Server's request buffer. buf[i] holds the response channel number
+int head = 0; // Buffer queue head index
+int tail = 0; // Buffer queue tail index
+int buf_count = 0; // Buffer queue length</declaration>
+	<template>
+		<name x="5" y="5">Server</name>
+		<declaration>clock server_clk;
+void pop() {
+    buf[head] = 0;
+    head = (client_count + head - 1) % client_count;
+    buf_count--;
+}
+
+void manage_buf(int cid) {
+    if(cid != 0) {
+        PRC--;
+        if(PRC == 0) {
+            halted = 1;
+            available = 0;
+        }
+        HRC++;
+        if(HRC == ASRC) {
+            available = 0;
+            HRC = 0;
+        }
+    }
+    pop();
+}</declaration>
+		<location id="id0" x="-731" y="-442">
+			<name x="-775" y="-450">idle</name>
+			<label kind="invariant" x="-903" y="-450">server_clk &lt;= 0</label>
+		</location>
+		<location id="id1" x="-869" y="-332">
+			<name x="-852" y="-340">halt</name>
+			<label kind="invariant" x="-901" y="-314">exec'==0</label>
+		</location>
+		<location id="id2" x="-833" y="-612">
+			<name x="-850" y="-646">busy</name>
+			<label kind="invariant" x="-901" y="-663">server_clk &lt;= resp_time</label>
+		</location>
+		<location id="id3" x="-442" y="-442">
+			<name x="-425" y="-450">unavailable</name>
+			<label kind="invariant" x="-425" y="-433">server_clk &lt;= UST</label>
+		</location>
+		<location id="id4" x="-578" y="-535">
+			<name x="-561" y="-544">await_req</name>
+			<label kind="invariant" x="-484" y="-544">server_clk &lt;= 1</label>
+		</location>
+		<init ref="id0"/>
+		<transition>
+			<source ref="id4"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-646" y="-501">server_clk &gt;= 1</label>
+			<label kind="assignment" x="-663" y="-484">server_clk = 0</label>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id4"/>
+			<label kind="guard" x="-782" y="-561">buf_count == 0 and available == 1</label>
+			<nail x="-723" y="-480"/>
+			<nail x="-621" y="-540"/>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-671" y="-399">server_clk &gt;= UST</label>
+			<label kind="assignment" x="-705" y="-365">available = 1, server_clk = 0</label>
+			<nail x="-501" y="-374"/>
+			<nail x="-688" y="-374"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id3"/>
+			<label kind="guard" x="-697" y="-442">available == 0 and halted == 0</label>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-1028" y="-544">server_clk &gt;= resp_time</label>
+			<label kind="synchronisation" x="-994" y="-527">respond[buf[head]]!</label>
+			<label kind="assignment" x="-1105" y="-510">server_clk = 0, manage_buf(buf[head])</label>
+			<nail x="-858" y="-561"/>
+			<nail x="-807" y="-476"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id2"/>
+			<label kind="guard" x="-807" y="-586">buf_count &gt; 0 and available == 1</label>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="guard" x="-892" y="-399">halted == 1</label>
+		</transition>
+	</template>
+	<template>
+		<name>Client</name>
+		<parameter>const int cid</parameter>
+		<declaration>clock clk;
+const int waiting_delay = 4;
+int [0,2] cb = 0; // CB State - 0 -&gt; Closed, 1 -&gt; Open, 2 -&gt; Half Open
+int [0,FT] clientTO = 0; // Timeout counter for each client
+int [0,HOST] cbSuccess = 0; // Success counter for Half-Open State
+int [-1,1] window[10] = {-1,-1,-1,-1,-1,-1,-1,-1,-1,-1}; // Window of requests with respective status. 0 -&gt; Success, 1 -&gt; Timeout, -1 -&gt; Empty slot
+int [0,9] wptr = 0; // Window pointer
+
+void resetIfDead() {
+    int i = 0;
+    cb = 0;
+    clientTO = 0;
+    cbSuccess = 0;
+    for(i = 0; i&lt;window_size; i++) {
+         window[i] = -1;
+    }
+}
+
+// Pushes request to the server queue
+void push() {
+    buf[tail] = cid;
+    tail = (client_count + tail - 1) % client_count;
+    buf_count++;
+    CPRC--;
+}
+
+// Breaks connection from the server and removes the request it had added to the queue
+void break_conn() {
+  int i = 0;
+  int j = 0;
+  int found = 0;
+  int pos;
+  for (i = 0; i &lt; client_count; i++) {
+    if (buf[i] == cid) {
+      buf[i] = 0;
+      pos = i;
+      found = 1;
+    }
+  }
+
+  if(found == 0) return;
+
+  if (pos != head) {
+    i = pos;
+    j = (client_count + i - 1) % client_count;
+    while (j != tail) {
+      buf[i] = buf[j];
+      i = j;
+      j = (client_count + j - 1) % client_count;
+    }
+    buf[i] = 0;
+    tail = i;
+    buf_count--;
+  }
+}
+
+// Utility function to clear the window of requests the DCBN is tracking 
+void reset_counters() {
+        int i = 0;
+        clientTO = 0;
+        cbSuccess = 0;
+        for(i = 0; i&lt;window_size; i++) {
+            window[i] = -1;
+        }
+}
+
+// Register the occurance of timeout into the data structure of a client with ID cid
+void register_timeout() {
+    int i = 0;
+    
+    window[wptr] = 1;
+    wptr = (wptr + 1) % window_size;
+
+    clientTO = 0;
+    for(i = 0; i&lt;window_size; i++) {
+        if(window[i] == 1) clientTO++;
+    }
+}
+
+// Register the receipt of successful response into the data structure of a client with ID cid
+void register_success() {
+    int i = 0;
+    
+    window[wptr] = 0;
+    wptr = (wptr + 1) % window_size;
+
+    clientTO = 0;
+    for(i = 0; i&lt;window_size; i++) {
+        if(window[i] == 1) clientTO++;
+    }
+}
+
+// CB state machine failure handling logic
+void cb_timeout_handler() {
+    if(cb == 0 &amp;&amp; clientTO == FT) {
+        cb = 1;
+        reset_counters();
+    } else if(cb == 2 &amp;&amp; clientTO == HOFT) {
+        reset_counters();
+        cb = 1;
+    }
+}
+
+// CB state machine success handling logic
+void cb_success_handler() {
+    if(cb == 2) {
+        cbSuccess++;
+        if(cbSuccess == HOST) {
+            reset_counters();
+            cb = 0;
+        }
+    }
+}
+
+void handle_timeout() {
+    CPRC++;
+    TC++;
+    if(alive[cid] == 1) {
+        register_timeout();
+        cb_timeout_handler();
+    } 
+    break_conn();    
+}
+
+void handle_response() {
+
+    if(alive[cid] == 1) {
+        register_success();
+        cb_success_handler();
+    }
+
+}
+</declaration>
+		<location id="id5" x="-765" y="-510">
+			<name x="-807" y="-518">idle</name>
+			<label kind="invariant" x="-884" y="-518">clk &lt;= 0</label>
+		</location>
+		<location id="id6" x="-289" y="-510">
+			<name x="-272" y="-519">blocked</name>
+			<label kind="invariant" x="-340" y="-484">clk &lt;= time_out</label>
+		</location>
+		<location id="id7" x="-961" y="-366">
+			<name x="-944" y="-374">halt</name>
+		</location>
+		<location id="id8" x="-603" y="-348">
+			<name x="-586" y="-357">open_circuit</name>
+			<label kind="invariant" x="-586" y="-340">clk &lt;= OD</label>
+		</location>
+		<location id="id9" x="-1028" y="-697">
+			<name x="-1038" y="-731">wait</name>
+			<label kind="invariant" x="-1130" y="-748">clk &lt;= waiting_delay</label>
+		</location>
+		<init ref="id5"/>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id5"/>
+			<label kind="guard" x="-1139" y="-612">clk &gt;= waiting_delay</label>
+			<label kind="assignment" x="-1062" y="-595">clk = 0</label>
+			<nail x="-969" y="-603"/>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-977" y="-680">(halted == 0 and CPRC == 0 and alive[cid] == 1 and cb != 1) or  (halted == 0 and alive[cid] == 0)</label>
+			<label kind="assignment" x="-943" y="-654">resetIfDead()</label>
+		</transition>
+		<transition>
+			<source ref="id8"/>
+			<target ref="id5"/>
+			<label kind="guard" x="-654" y="-467">clk &gt;= OD</label>
+			<label kind="assignment" x="-654" y="-450">cb = 2, clk = 0</label>
+			<nail x="-612" y="-391"/>
+			<nail x="-705" y="-484"/>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id8"/>
+			<label kind="guard" x="-875" y="-416">halted == 0 and alive[cid] == 1 and cb == 1</label>
+		</transition>
+		<transition>
+			<source ref="id6"/>
+			<target ref="id5"/>
+			<label kind="guard" x="-603" y="-646">clk &gt;=time_out</label>
+			<label kind="assignment" x="-629" y="-629">clk = 0, handle_timeout()</label>
+			<nail x="-365" y="-629"/>
+			<nail x="-705" y="-629"/>
+		</transition>
+		<transition>
+			<source ref="id6"/>
+			<target ref="id5"/>
+			<label kind="synchronisation" x="-586" y="-586">respond[cid]?</label>
+			<label kind="assignment" x="-637" y="-569">clk = 0, handle_response()</label>
+			<nail x="-382" y="-569"/>
+			<nail x="-680" y="-569"/>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id7"/>
+			<label kind="guard" x="-952" y="-459">halted == 1</label>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id6"/>
+			<label kind="guard" x="-739" y="-527">halted == 0 and alive[cid] == 1 and CPRC &gt; 0 and cb != 1</label>
+			<label kind="assignment" x="-561" y="-510">push()</label>
+		</transition>
+	</template>
+	<template>
+		<name>ClientShuffler</name>
+		<declaration>clock s_clk;
+
+void shuffle(int cid) {
+    int i = 0;
+    int k = 0;
+    int j = inactive_clients;
+    int client = cid; 
+
+    for(i = 0; i&lt;client_count+1; i++) {
+        alive[i] = 1;
+    }
+
+    while(j != 0) {
+        alive[client] = 0;
+        client = ((client) % (client_count)) + 1;
+        j--;
+    }
+}</declaration>
+		<location id="id10" x="-680" y="-76">
+			<name x="-731" y="-101">idle</name>
+			<label kind="invariant" x="-824" y="-84">s_clk &lt;= s_delay</label>
+		</location>
+		<location id="id11" x="-399" y="-76">
+			<name x="-382" y="-85">halt</name>
+		</location>
+		<init ref="id10"/>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id10"/>
+			<label kind="select" x="-731" y="-229">cid : int[1, client_count]</label>
+			<label kind="guard" x="-765" y="-212">s_clk &gt;= s_delay and halted == 0</label>
+			<label kind="assignment" x="-731" y="-187">s_clk = 0, shuffle(cid)</label>
+			<nail x="-629" y="-119"/>
+			<nail x="-561" y="-187"/>
+			<nail x="-748" y="-186"/>
+		</transition>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id11"/>
+			<label kind="guard" x="-663" y="-67">s_clk &gt;= s_delay and halted == 1</label>
+		</transition>
+	</template>
+	<system>server = Server();
+c1 = Client(1);
+c2 = Client(2);
+c3 = Client(3);
+c4 = Client(4);
+c5 = Client(5);
+c6 = Client(6);
+c7 = Client(7);
+c8 = Client(8);
+cs = ClientShuffler();
+
+system c1, c2, c3, c4, c5, c6, c7, c8, server, cs;
+</system>
+	<queries>
+		<query>
+			<formula>simulate [&lt;=10500; 1] {TC}</formula>
+			<comment>Query to observe a time-bound whithin which TC stops increasing. We use this time-bound in other SMC queries.</comment>
+		</query>
+		<query>
+			<formula>E[&lt;=10500; 500](max: exec)</formula>
+			<comment>Query to obtain the expected time needed by the server to addressing MRC number of requests.</comment>
+		</query>
+		<query>
+			<formula>E[&lt;=10500; 500](max: TC)</formula>
+			<comment>Query to obtain expected number of timeouts experienced by the system for addressing MRC number of requests.</comment>
+		</query>
+	</queries>
+</nta>
