@@ -95,7 +95,7 @@ E[<= 10500; 500](max : TC)
 ```
 E[<= 10500; 500](max : exec)
 ```
-The queries shown above provide the expected maximum value of the variable TC and the clock variable exec respectively within the time 10500 units evaluated over 500 simulations. For a given availability value configuration and the system at hand, we first run a few simulations to find the time bound by which the system halts and use this time period for the above SMC queries For example, we found that 10500 is a time bound by which all our modelled systems halted. Such simulations may be run using a query like:
+The queries shown above provide the expected maximum value of the variable TC and the clock variable exec respectively within the time 10500 units evaluated over 500 simulations (use 50 simulations for a less accurate but faster result). For every given availability value configuration and the system at hand, we first run a few simulations to find the time bound by which the system halts and use this time period for the above SMC queries For example, we found that 10500 is a time bound by which all our modelled systems halted. Such simulations may be run using a query like:
 
 ```
 simulate [<=10500; 1] {TC}
