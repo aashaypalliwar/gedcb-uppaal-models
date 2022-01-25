@@ -2,7 +2,7 @@
 <br />
 <div align="center">
 
-  <h1 align="center">UPPAAL Models for GEDCB</h3>
+  <h1 align="center">UPPAAL Models for measuring the efficacy of GEDCB</h3>
 
   <p align="center">
     Using Gossip Enabled Distributed Circuit Breaking for Improving Resiliency of Distributed Systems
