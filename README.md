@@ -33,6 +33,9 @@
   </ol>
 </details>
 
+<!--  -->
+<div style="text-align: justify">
+
 ## About The Project
 
 The [circuit breaker resiliency pattern](https://docs.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) has been popularly used to improve the resiliency of distributed systems. We targetted a scope of improvement in this pattern by bringing in some modifications to the traditional circuit breaker pattern and coupling it with a gossip-based information dissemination protocol. We modelled the relevant systems using UPPAAL and provided data supporting the efficacy of our proposals. This repository holds the three UPPAAL models that were used to claim the efficacy. These proposals have been submitted and accepted for presentation at the 19th IEEE International Conference on Software Architecture ([ICSA 2022](https://icsa-conferences.org/2022/)) as a full technical paper.
@@ -113,3 +116,5 @@ Distributed under the MIT License. See [LICENSE.md](https://github.com/aashaypal
 Aashay Palliwar - avp10@iitbbs.ac.in
 
 Srinivas Pinisetty - spinisetty@iitbbs.ac.in
+
+</div>
