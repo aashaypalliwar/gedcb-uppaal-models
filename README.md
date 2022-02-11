@@ -105,6 +105,9 @@ simulate [<=10500; 1] {TC}
 ```
 
 Once the system halts, the two variables of interest do not increase in value with time. Hence the queries to find the expected maximum value of the variables within this experimentally found time-bound provide the correct estimations.
+<br>
+<br>
+To reproduce the results of the study, use the step by step procedure mentioned [here](https://github.com/aashaypalliwar/gedcb-uppaal-models/blob/main/RECREATE.md)
 
 <!-- LICENSE -->
 ## License
